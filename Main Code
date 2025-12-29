@@ -1,0 +1,616 @@
+import React, { useState, useEffect } from 'react';
+import { Search, Tag, Shuffle, Plus, X, Clock, Users, Database, AlertCircle } from 'lucide-react';
+
+const RecipeManager = () => {
+  const [recipes, setRecipes] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedTags, setSelectedTags] = useState([]);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [viewRecipe, setViewRecipe] = useState(null);
+  const [showSetup, setShowSetup] = useState(false);
+  const [supabaseUrl, setSupabaseUrl] = useState('');
+  const [supabaseKey, setSupabaseKey] = useState('');
+  const [isConfigured, setIsConfigured] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [newRecipe, setNewRecipe] = useState({
+    name: '',
+    description: '',
+    ingredients: '',
+    instructions: '',
+    prepTime: '',
+    servings: '',
+    tags: ''
+  });
+
+  useEffect(() => {
+    loadConfig();
+  }, []);
+
+  useEffect(() => {
+    if (isConfigured) {
+      loadRecipes();
+    }
+  }, [isConfigured]);
+
+  const loadConfig = async () => {
+    try {
+      const urlResult = await window.storage.get('supabase_url');
+      const keyResult = await window.storage.get('supabase_key');
+      
+      if (urlResult && keyResult) {
+        setSupabaseUrl(urlResult.value);
+        setSupabaseKey(keyResult.value);
+        setIsConfigured(true);
+      } else {
+        setShowSetup(true);
+      }
+    } catch (e) {
+      setShowSetup(true);
+    }
+  };
+
+  const saveConfig = async () => {
+    if (!supabaseUrl || !supabaseKey) {
+      setError('Please enter both URL and API key');
+      return;
+    }
+
+    try {
+      await window.storage.set('supabase_url', supabaseUrl);
+      await window.storage.set('supabase_key', supabaseKey);
+      setIsConfigured(true);
+      setShowSetup(false);
+      setError('');
+    } catch (e) {
+      setError('Failed to save configuration');
+    }
+  };
+
+  const loadRecipes = async () => {
+    setLoading(true);
+    setError('');
+    
+    try {
+      const response = await fetch(`${supabaseUrl}/rest/v1/recipes?select=*`, {
+        headers: {
+          'apikey': supabaseKey,
+          'Authorization': `Bearer ${supabaseKey}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to load recipes');
+      }
+
+      const data = await response.json();
+      setRecipes(data);
+    } catch (e) {
+      setError('Failed to load recipes. Check your database setup.');
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveRecipe = async (recipe) => {
+    try {
+      const response = await fetch(`${supabaseUrl}/rest/v1/recipes`, {
+        method: 'POST',
+        headers: {
+          'apikey': supabaseKey,
+          'Authorization': `Bearer ${supabaseKey}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation'
+        },
+        body: JSON.stringify(recipe)
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save recipe');
+      }
+
+      const data = await response.json();
+      return data[0];
+    } catch (e) {
+      setError('Failed to save recipe');
+      console.error(e);
+      return null;
+    }
+  };
+
+  const deleteRecipe = async (recipeId) => {
+    try {
+      const response = await fetch(`${supabaseUrl}/rest/v1/recipes?id=eq.${recipeId}`, {
+        method: 'DELETE',
+        headers: {
+          'apikey': supabaseKey,
+          'Authorization': `Bearer ${supabaseKey}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to delete recipe');
+      }
+
+      setRecipes(recipes.filter(r => r.id !== recipeId));
+      if (viewRecipe?.id === recipeId) {
+        setViewRecipe(null);
+      }
+    } catch (e) {
+      setError('Failed to delete recipe');
+      console.error(e);
+    }
+  };
+
+  const handleAddRecipe = async () => {
+    if (!newRecipe.name || !newRecipe.ingredients || !newRecipe.instructions) {
+      setError('Please fill in required fields: Name, Ingredients, and Instructions');
+      return;
+    }
+
+    const recipe = {
+      name: newRecipe.name,
+      description: newRecipe.description,
+      ingredients: newRecipe.ingredients.split('\n').filter(i => i.trim()),
+      instructions: newRecipe.instructions.split('\n').filter(i => i.trim()),
+      prep_time: newRecipe.prepTime,
+      servings: newRecipe.servings,
+      tags: newRecipe.tags.split(',').map(t => t.trim()).filter(t => t),
+      created_at: new Date().toISOString()
+    };
+    
+    const saved = await saveRecipe(recipe);
+    if (saved) {
+      setRecipes([...recipes, saved]);
+      setNewRecipe({
+        name: '',
+        description: '',
+        ingredients: '',
+        instructions: '',
+        prepTime: '',
+        servings: '',
+        tags: ''
+      });
+      setShowAddForm(false);
+      setError('');
+    }
+  };
+
+  const getAllTags = () => {
+    const tagSet = new Set();
+    recipes.forEach(recipe => {
+      if (recipe.tags) {
+        recipe.tags.forEach(tag => tagSet.add(tag));
+      }
+    });
+    return Array.from(tagSet).sort();
+  };
+
+  const toggleTag = (tag) => {
+    setSelectedTags(prev =>
+      prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+    );
+  };
+
+  const getRandomRecipe = () => {
+    const filtered = getFilteredRecipes();
+    if (filtered.length > 0) {
+      const random = filtered[Math.floor(Math.random() * filtered.length)];
+      setViewRecipe(random);
+    }
+  };
+
+  const getFilteredRecipes = () => {
+    return recipes.filter(recipe => {
+      const matchesSearch = searchTerm === '' ||
+        recipe.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (recipe.description && recipe.description.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        (recipe.ingredients && recipe.ingredients.some(i => i.toLowerCase().includes(searchTerm.toLowerCase())));
+      
+      const matchesTags = selectedTags.length === 0 ||
+        (recipe.tags && selectedTags.every(tag => recipe.tags.includes(tag)));
+      
+      return matchesSearch && matchesTags;
+    });
+  };
+
+  const filteredRecipes = getFilteredRecipes();
+
+  if (showSetup) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6 flex items-center justify-center">
+        <div className="bg-white rounded-xl shadow-xl p-8 max-w-2xl w-full">
+          <div className="flex items-center gap-3 mb-6">
+            <Database size={32} className="text-blue-500" />
+            <h1 className="text-3xl font-bold text-gray-800">Database Setup</h1>
+          </div>
+          
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+            <h2 className="font-semibold text-blue-900 mb-2">Setup Instructions:</h2>
+            <ol className="space-y-2 text-sm text-blue-800">
+              <li>1. Go to <a href="https://supabase.com" target="_blank" className="underline font-semibold">supabase.com</a> and create a free account</li>
+              <li>2. Create a new project (choose a name, password, and region)</li>
+              <li>3. Go to Project Settings → API</li>
+              <li>4. Copy the "Project URL" and "anon/public" API key</li>
+              <li>5. In the SQL Editor, run this command to create your table:</li>
+            </ol>
+            <pre className="mt-3 bg-gray-900 text-green-400 p-3 rounded text-xs overflow-x-auto">
+{`CREATE TABLE recipes (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  ingredients TEXT[] NOT NULL,
+  instructions TEXT[] NOT NULL,
+  prep_time TEXT,
+  servings TEXT,
+  tags TEXT[],
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);`}
+            </pre>
+          </div>
+
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 flex items-center gap-2">
+              <AlertCircle size={20} className="text-red-500" />
+              <span className="text-red-800">{error}</span>
+            </div>
+          )}
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Supabase Project URL</label>
+              <input
+                type="text"
+                placeholder="https://your-project.supabase.co"
+                value={supabaseUrl}
+                onChange={(e) => setSupabaseUrl(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Supabase API Key (anon/public)</label>
+              <input
+                type="password"
+                placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                value={supabaseKey}
+                onChange={(e) => setSupabaseKey(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+
+            <button
+              onClick={saveConfig}
+              className="w-full px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-semibold"
+            >
+              Save Configuration
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (viewRecipe) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-orange-50 to-red-50 p-6">
+        <div className="max-w-4xl mx-auto">
+          <button
+            onClick={() => setViewRecipe(null)}
+            className="mb-4 px-4 py-2 bg-white rounded-lg shadow hover:shadow-md transition-shadow flex items-center gap-2"
+          >
+            <X size={20} /> Back to Recipes
+          </button>
+          
+          <div className="bg-white rounded-xl shadow-lg p-8">
+            <div className="flex justify-between items-start mb-4">
+              <h1 className="text-4xl font-bold text-gray-800">{viewRecipe.name}</h1>
+              <button
+                onClick={() => {
+                  if (confirm('Delete this recipe?')) {
+                    deleteRecipe(viewRecipe.id);
+                  }
+                }}
+                className="px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+              >
+                Delete
+              </button>
+            </div>
+            
+            <p className="text-gray-600 mb-4">{viewRecipe.description}</p>
+            
+            <div className="flex gap-4 mb-6">
+              {viewRecipe.prep_time && (
+                <div className="flex items-center gap-2 text-gray-600">
+                  <Clock size={20} />
+                  <span>{viewRecipe.prep_time}</span>
+                </div>
+              )}
+              {viewRecipe.servings && (
+                <div className="flex items-center gap-2 text-gray-600">
+                  <Users size={20} />
+                  <span>{viewRecipe.servings} servings</span>
+                </div>
+              )}
+            </div>
+            
+            <div className="flex flex-wrap gap-2 mb-6">
+              {viewRecipe.tags && viewRecipe.tags.map(tag => (
+                <span key={tag} className="px-3 py-1 bg-orange-100 text-orange-700 rounded-full text-sm">
+                  {tag}
+                </span>
+              ))}
+            </div>
+            
+            <div className="grid md:grid-cols-2 gap-8">
+              <div>
+                <h2 className="text-2xl font-semibold mb-4 text-gray-800">Ingredients</h2>
+                <ul className="space-y-2">
+                  {viewRecipe.ingredients && viewRecipe.ingredients.map((ingredient, idx) => (
+                    <li key={idx} className="flex items-start">
+                      <span className="text-orange-500 mr-2">•</span>
+                      <span className="text-gray-700">{ingredient}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              
+              <div>
+                <h2 className="text-2xl font-semibold mb-4 text-gray-800">Instructions</h2>
+                <ol className="space-y-3">
+                  {viewRecipe.instructions && viewRecipe.instructions.map((instruction, idx) => (
+                    <li key={idx} className="flex items-start">
+                      <span className="font-semibold text-orange-500 mr-3">{idx + 1}.</span>
+                      <span className="text-gray-700">{instruction}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-orange-50 to-red-50 p-6">
+      <div className="max-w-6xl mx-auto">
+        <div className="mb-8 flex justify-between items-start">
+          <div>
+            <h1 className="text-4xl font-bold text-gray-800 mb-2">My Recipe Collection</h1>
+            <p className="text-gray-600">Search, filter, and discover your favorite recipes</p>
+          </div>
+          <button
+            onClick={() => setShowSetup(true)}
+            className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 flex items-center gap-2"
+          >
+            <Database size={20} /> Database Settings
+          </button>
+        </div>
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6 flex items-center gap-2">
+            <AlertCircle size={20} className="text-red-500" />
+            <span className="text-red-800">{error}</span>
+          </div>
+        )}
+
+        {/* Search and Actions */}
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+          <div className="flex flex-col md:flex-row gap-4 mb-4">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
+              <input
+                type="text"
+                placeholder="Search recipes by name, description, or ingredient..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              />
+            </div>
+            <button
+              onClick={getRandomRecipe}
+              disabled={filteredRecipes.length === 0}
+              className="px-6 py-3 bg-purple-500 text-white rounded-lg hover:bg-purple-600 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center gap-2 justify-center"
+            >
+              <Shuffle size={20} /> Random Recipe
+            </button>
+            <button
+              onClick={() => setShowAddForm(!showAddForm)}
+              className="px-6 py-3 bg-orange-500 text-white rounded-lg hover:bg-orange-600 flex items-center gap-2 justify-center"
+            >
+              <Plus size={20} /> Add Recipe
+            </button>
+          </div>
+
+          {/* Tag Filter */}
+          {getAllTags().length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <Tag size={20} className="text-gray-600" />
+                <span className="font-semibold text-gray-700">Filter by tags:</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {getAllTags().map(tag => (
+                  <button
+                    key={tag}
+                    onClick={() => toggleTag(tag)}
+                    className={`px-4 py-2 rounded-full transition-colors ${
+                      selectedTags.includes(tag)
+                        ? 'bg-orange-500 text-white'
+                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Add Recipe Form */}
+        {showAddForm && (
+          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+            <h2 className="text-2xl font-bold text-gray-800 mb-4">Add New Recipe</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Recipe Name *</label>
+                <input
+                  type="text"
+                  value={newRecipe.name}
+                  onChange={(e) => setNewRecipe({...newRecipe, name: e.target.value})}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Description</label>
+                <input
+                  type="text"
+                  value={newRecipe.description}
+                  onChange={(e) => setNewRecipe({...newRecipe, description: e.target.value})}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                />
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Prep Time</label>
+                  <input
+                    type="text"
+                    placeholder="e.g., 30 minutes"
+                    value={newRecipe.prepTime}
+                    onChange={(e) => setNewRecipe({...newRecipe, prepTime: e.target.value})}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Servings</label>
+                  <input
+                    type="text"
+                    placeholder="e.g., 4"
+                    value={newRecipe.servings}
+                    onChange={(e) => setNewRecipe({...newRecipe, servings: e.target.value})}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Ingredients (one per line) *</label>
+                <textarea
+                  rows="6"
+                  value={newRecipe.ingredients}
+                  onChange={(e) => setNewRecipe({...newRecipe, ingredients: e.target.value})}
+                  placeholder="2 cups flour&#10;1 tsp salt&#10;3 eggs"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Instructions (one per line) *</label>
+                <textarea
+                  rows="6"
+                  value={newRecipe.instructions}
+                  onChange={(e) => setNewRecipe({...newRecipe, instructions: e.target.value})}
+                  placeholder="Preheat oven to 350°F&#10;Mix dry ingredients&#10;Add wet ingredients"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Tags (comma-separated)</label>
+                <input
+                  type="text"
+                  value={newRecipe.tags}
+                  onChange={(e) => setNewRecipe({...newRecipe, tags: e.target.value})}
+                  placeholder="dinner, vegetarian, quick, italian"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                />
+              </div>
+
+              <div className="flex gap-4">
+                <button
+                  onClick={handleAddRecipe}
+                  className="px-6 py-3 bg-orange-500 text-white rounded-lg hover:bg-orange-600 font-semibold"
+                >
+                  Save Recipe
+                </button>
+                <button
+                  onClick={() => setShowAddForm(false)}
+                  className="px-6 py-3 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 font-semibold"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Recipe Grid */}
+        {loading ? (
+          <div className="text-center py-12">
+            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500"></div>
+            <p className="mt-4 text-gray-600">Loading recipes...</p>
+          </div>
+        ) : (
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredRecipes.length === 0 ? (
+              <div className="col-span-full text-center py-12 text-gray-500">
+                {recipes.length === 0 ? (
+                  <p>No recipes yet. Add your first recipe to get started!</p>
+                ) : (
+                  <p>No recipes match your search criteria.</p>
+                )}
+              </div>
+            ) : (
+              filteredRecipes.map(recipe => (
+                <div
+                  key={recipe.id}
+                  onClick={() => setViewRecipe(recipe)}
+                  className="bg-white rounded-xl shadow-md hover:shadow-xl transition-shadow cursor-pointer p-6"
+                >
+                  <h3 className="text-xl font-bold text-gray-800 mb-2">{recipe.name}</h3>
+                  <p className="text-gray-600 text-sm mb-4 line-clamp-2">{recipe.description}</p>
+                  
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {recipe.tags && recipe.tags.slice(0, 3).map(tag => (
+                      <span key={tag} className="px-2 py-1 bg-orange-100 text-orange-700 rounded text-xs">
+                        {tag}
+                      </span>
+                    ))}
+                    {recipe.tags && recipe.tags.length > 3 && (
+                      <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">
+                        +{recipe.tags.length - 3} more
+                      </span>
+                    )}
+                  </div>
+                  
+                  <div className="flex gap-4 text-sm text-gray-500">
+                    {recipe.prep_time && (
+                      <div className="flex items-center gap-1">
+                        <Clock size={16} />
+                        <span>{recipe.prep_time}</span>
+                      </div>
+                    )}
+                    {recipe.servings && (
+                      <div className="flex items-center gap-1">
+                        <Users size={16} />
+                        <span>{recipe.servings}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default RecipeManager;
